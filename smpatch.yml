@@ -1,0 +1,21 @@
+#
+# Sample patch specification for SMPatch
+#
+
+
+## The id of this patch, displayed at run time
+id: Sample patch
+
+## Only apply this patch to installations with at least this DBVersion
+mindb: 8
+
+## Only apply this patch to installations with at most this DBVersion
+maxdb: 8
+
+
+## Only apply this patch to installations with at least this AppVersion
+minapp: 3.0 RC1
+
+## Only apply this patch to installations with at most this DBVersion
+maxapp: 3.0 RC5
+
