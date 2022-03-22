@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ I patch live ScoreMaster installations.`
 
 var verbose = flag.Bool("v", false, "Verbose")
 var silent = flag.Bool("s", false, "Silent")
+var force = flag.Bool("force", false, "Apply patch regardless of criteria")
 var showusage = flag.Bool("?", false, "Show this help text")
 var path2root = flag.String("sm", ".", "Path of ScoreMaster root folder")
 var patchfile = flag.String("pf", "smpatch.zip", "File containing patches")
@@ -46,11 +48,14 @@ var cfg struct {
 	DBVersion  int
 	AppVersion string
 	PatchCfg   struct {
-		PatchID string `yaml:"id"`
-		MinDB   int    `yaml:"mindb"`
-		MinApp  string `yaml:"minapp"`
-		MaxDB   int    `yaml:"maxdb"`
-		MaxApp  string `yaml:"maxapp"`
+		PatchID string   `yaml:"id"`
+		MinDB   int      `yaml:"mindb"`
+		MinApp  string   `yaml:"minapp"`
+		MaxDB   int      `yaml:"maxdb"`
+		MaxApp  string   `yaml:"maxapp"`
+		Files   []string `yaml:"files"`
+		SQL     []string `yaml:"sql"`
+		Folders []string `yaml:"folders"`
 	}
 }
 
@@ -74,19 +79,25 @@ type timestamp struct {
 
 func checkAppVersion() {
 
-	v1, _ := version.NewVersion(strings.ReplaceAll(cfg.AppVersion, " ", "-"))
-	vmin, _ := version.NewVersion(strings.ReplaceAll(cfg.PatchCfg.MinApp, " ", "-"))
-	vmax, _ := version.NewVersion(strings.ReplaceAll(cfg.PatchCfg.MaxApp, " ", "-"))
+	v1, err := version.NewVersion(strings.ReplaceAll(cfg.AppVersion, " ", "-"))
+	if err != nil {
+		return
+	}
+	vmin, minerr := version.NewVersion(strings.ReplaceAll(cfg.PatchCfg.MinApp, " ", "-"))
+	vmax, maxerr := version.NewVersion(strings.ReplaceAll(cfg.PatchCfg.MaxApp, " ", "-"))
 	if *verbose {
 		fmt.Printf("Vapp IS '%v' [%v]\n", v1, cfg.AppVersion)
+
 		fmt.Printf("Vmin IS '%v' [%v]\n", vmin, cfg.PatchCfg.MinApp)
+
 		fmt.Printf("Vmax IS '%v' [%v]\n", vmax, cfg.PatchCfg.MaxApp)
+
 	}
-	if v1.LessThan(vmin) {
+	if minerr == nil && v1.LessThan(vmin) {
 		fmt.Printf("AppVersion is older than range %v-%v - run aborted\n", cfg.PatchCfg.MinApp, cfg.PatchCfg.MaxApp)
 		osExit(1)
 	}
-	if v1.GreaterThan(vmax) {
+	if maxerr == nil && v1.GreaterThan(vmax) {
 		fmt.Printf("AppVersion is newer than range %v-%v - run aborted\n", cfg.PatchCfg.MinApp, cfg.PatchCfg.MaxApp)
 		osExit(1)
 	}
@@ -150,10 +161,6 @@ func fetchConfigFromDB() string {
 
 func init() {
 
-	//ex, _ := os.Executable()
-	//exPath := filepath.Dir(ex)
-	//os.Chdir(exPath)
-
 	flag.Usage = func() {
 		w := flag.CommandLine.Output()
 		fmt.Fprintf(w, "%v v%v\n", apptitle, appversion)
@@ -172,8 +179,6 @@ func init() {
 	}
 
 	openPatchfile()
-
-	defer closePatchfile()
 
 	cfg.Path2DB = filepath.Join(*path2root, "sm", "ScoreMaster.db")
 
@@ -230,15 +235,30 @@ func main() {
 		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n", apptitle, appversion)
 	}
 	if !*silent {
-		fmt.Printf("Patching \"%v\" (%v) - DBVersion is %v; AppVersion is %v\n", cfg.RallyTitle, *path2root, cfg.DBVersion, cfg.AppVersion)
+		fmt.Printf("\nPatching \"%v\" (%v) - DBVersion is %v; AppVersion is %v\n", cfg.RallyTitle, *path2root, cfg.DBVersion, cfg.AppVersion)
 	}
-	if cfg.DBVersion < cfg.PatchCfg.MinDB || cfg.DBVersion > cfg.PatchCfg.MaxDB {
-		fmt.Printf("DBVersion is not in range %v-%v - run aborted\n", cfg.PatchCfg.MinDB, cfg.PatchCfg.MaxDB)
-		osExit(1)
+	defer closePatchfile()
+
+	if !*force {
+		if cfg.DBVersion < cfg.PatchCfg.MinDB || cfg.DBVersion > cfg.PatchCfg.MaxDB {
+			fmt.Printf("DBVersion is not in range %v-%v - run aborted\n", cfg.PatchCfg.MinDB, cfg.PatchCfg.MaxDB)
+			osExit(1)
+		}
+		checkAppVersion()
+	} else {
+		if !*silent {
+			fmt.Println("Forcing patch application")
+		}
 	}
-	checkAppVersion()
 	if !*silent {
-		fmt.Printf("Applying patch \"%v\"\n", cfg.PatchCfg.PatchID)
+		fmt.Printf("\nApplying patch \"%v\"\n", cfg.PatchCfg.PatchID)
+	}
+	runPatchSQL()
+	runMakeFolders()
+	runFileCopies()
+
+	if !*silent {
+		fmt.Printf("Patch applied successfully\n\n")
 	}
 
 }
@@ -290,6 +310,82 @@ func osExit(res int) {
 
 }
 
+func runFileCopies() {
+
+	copyFiles := len(cfg.PatchCfg.Files) > 0
+	if copyFiles {
+		fmt.Println("Updating application files")
+	}
+	for _, line := range cfg.PatchCfg.Files {
+		if *verbose {
+			fmt.Printf("Updating %v\n", line)
+		}
+
+		x := strings.ReplaceAll(line, "/", string(filepath.Separator))
+		y := filepath.Join(*path2root, x)
+		z := filepath.Base(y)
+		if *verbose {
+			fmt.Printf("Writing %v\n", y)
+		}
+
+		rc, err := ptz.Open(z)
+		if err != nil {
+			fmt.Printf("*** Can't read patch %v [%v]\n", line, err)
+			continue
+		}
+		f, err := os.Create(y)
+		if err != nil {
+			fmt.Printf("*** Can't create file %v [%v]\n", y, err)
+			continue
+		}
+		io.Copy(f, rc)
+		f.Close()
+
+		rc.Close()
+	}
+	if copyFiles {
+		fmt.Println("File patches applied")
+	}
+
+}
+
+func runMakeFolders() {
+
+	for _, line := range cfg.PatchCfg.Folders {
+		if *verbose {
+			fmt.Printf("Making folder %v\n", line)
+		}
+		x := strings.ReplaceAll(line, "/", string(filepath.Separator))
+		y := filepath.Join(*path2root, x)
+		err := os.MkdirAll(y, os.ModeDir)
+		if err != nil {
+			fmt.Printf("*** %v ** FAILED ** %v\n", line, err)
+		}
+
+	}
+
+}
+
+func runPatchSQL() {
+
+	applyPatch := len(cfg.PatchCfg.SQL) > 0
+	if applyPatch {
+		fmt.Println("Upgrading the database")
+	}
+	for _, line := range cfg.PatchCfg.SQL {
+		if *verbose {
+			fmt.Printf("Applying %v\n", line)
+		}
+		_, err := dbh.Exec(line)
+		if err != nil {
+			fmt.Printf("*** %v ** FAILED ** %v\n", line, err)
+		}
+
+	}
+	if applyPatch {
+		fmt.Println("Database upgraded")
+	}
+}
 func waitforkey() {
 
 	fmt.Printf("%v: Press [Enter] to exit ... \n", apptitle)

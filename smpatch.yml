@@ -17,5 +17,18 @@ maxdb: 8
 minapp: 3.0 RC1
 
 ## Only apply this patch to installations with at most this DBVersion
-maxapp: 3.0 RC5
+maxapp: 
+
+sql:
+  - ALTER TABLE "main"."bonuses" ADD COLUMN 	"PhotoID"	INTEGER;
+  - UPDATE rallyparams SET DBVersion=9;
+
+files:
+  - smpatch.exe
+  - smx/about.php
+
+folders:
+  - smx
+
+
 
