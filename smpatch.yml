@@ -4,7 +4,7 @@
 
 
 ## The id of this patch, displayed at run time
-id: Sample patch
+id: Post RC4 patches
 
 ## Only apply this patch to installations with at least this DBVersion
 mindb: 8
@@ -20,15 +20,15 @@ minapp: 3.0 RC1
 maxapp: 
 
 sql:
-  - ALTER TABLE "main"."bonuses" ADD COLUMN 	"PhotoID"	INTEGER;
-  - UPDATE rallyparams SET DBVersion=9;
 
 files:
-  - smpatch.exe
-  - smx/about.php
-
+  - sm/about.php
+  - sm/bonuses.php
+  - sm/scorecard.php
+  - sm/score.css
+  - sm/entrants.php
+  
 folders:
-  - smx
 
 
 

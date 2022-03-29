@@ -2,6 +2,30 @@
 // I patch live ScoreMaster installations
 package main
 
+/***************************************************************************
+MIT License
+
+Copyright (c) 2022 Bob Stammers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.package main
+*****************************************************************************/
+
 import (
 	"archive/zip"
 	"database/sql"
@@ -18,12 +42,13 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-version"
+	"github.com/manifoldco/promptui"
 	_ "github.com/mattn/go-sqlite3"
 	yaml "gopkg.in/yaml.v2"
 )
 
 const progdesc = `
-I patch live ScoreMaster installations.`
+I patch (upgrade) live ScoreMaster installations.`
 
 var verbose = flag.Bool("v", false, "Verbose")
 var silent = flag.Bool("s", false, "Silent")
@@ -31,11 +56,10 @@ var force = flag.Bool("force", false, "Apply patch regardless of criteria")
 var showusage = flag.Bool("?", false, "Show this help text")
 var path2root = flag.String("sm", ".", "Path of ScoreMaster root folder")
 var patchfile = flag.String("pf", "smpatch.zip", "File containing patches")
-var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var dontDeletePatchfile = flag.Bool("save", false, "Don't delete the patchfile on completion")
 
 const apptitle = "SMPatch"
-const appversion = "1.0"
+const appversion = "1.1"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -43,7 +67,6 @@ var ptz *zip.ReadCloser
 
 var cfg struct {
 	Path2DB    string
-	KeyWait    bool
 	RallyTitle string
 	DBVersion  int
 	AppVersion string
@@ -77,6 +100,14 @@ type timestamp struct {
 	date time.Time
 }
 
+func appTargetVersion() string {
+
+	if cfg.PatchCfg.MinApp == cfg.PatchCfg.MaxApp {
+		return fmt.Sprintf("%v", cfg.PatchCfg.MinApp)
+	}
+	return fmt.Sprintf("%v-%v", cfg.PatchCfg.MinApp, cfg.PatchCfg.MaxApp)
+}
+
 func checkAppVersion() {
 
 	v1, err := version.NewVersion(strings.ReplaceAll(cfg.AppVersion, " ", "-"))
@@ -94,11 +125,11 @@ func checkAppVersion() {
 
 	}
 	if minerr == nil && v1.LessThan(vmin) {
-		fmt.Printf("AppVersion is older than range %v-%v - run aborted\n", cfg.PatchCfg.MinApp, cfg.PatchCfg.MaxApp)
+		fmt.Printf("AppVersion is older than %v - run aborted\n", appTargetVersion())
 		osExit(1)
 	}
 	if maxerr == nil && v1.GreaterThan(vmax) {
-		fmt.Printf("AppVersion is newer than range %v-%v - run aborted\n", cfg.PatchCfg.MinApp, cfg.PatchCfg.MaxApp)
+		fmt.Printf("AppVersion is newer than %v - run aborted\n", appTargetVersion())
 		osExit(1)
 	}
 
@@ -110,6 +141,14 @@ func closePatchfile() {
 	if !*dontDeletePatchfile {
 		os.Remove(*patchfile)
 	}
+}
+
+func dbTargetVersion() string {
+
+	if cfg.PatchCfg.MaxDB == cfg.PatchCfg.MinDB {
+		return fmt.Sprintf("%v", cfg.PatchCfg.MaxDB)
+	}
+	return fmt.Sprintf("in range %v-%v", cfg.PatchCfg.MinDB, cfg.PatchCfg.MaxDB)
 }
 
 func extractTime(s string) string {
@@ -156,6 +195,20 @@ func fetchConfigFromDB() string {
 	var res string
 	rows.Scan(&res)
 	return res
+
+}
+
+func getYN(prompt string) bool {
+
+	promptx := promptui.Select{
+		Label: prompt,
+		Items: []string{"Yes", "No"},
+	}
+
+	_, result, _ := promptx.Run()
+
+	fmt.Printf("You chose %v\n", result)
+	return result == "Yes"
 
 }
 
@@ -232,16 +285,16 @@ func logts() string {
 
 func main() {
 	if !*silent {
-		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n", apptitle, appversion)
+		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n%v\n", apptitle, appversion, progdesc)
 	}
 	if !*silent {
-		fmt.Printf("\nPatching \"%v\" (%v) - DBVersion is %v; AppVersion is %v\n", cfg.RallyTitle, *path2root, cfg.DBVersion, cfg.AppVersion)
+		fmt.Printf("\nPatching \"%v\" (%v) - DBVersion is %v; AppVersion is %v\n\n", cfg.RallyTitle, *path2root, cfg.DBVersion, cfg.AppVersion)
 	}
 	defer closePatchfile()
 
 	if !*force {
 		if cfg.DBVersion < cfg.PatchCfg.MinDB || cfg.DBVersion > cfg.PatchCfg.MaxDB {
-			fmt.Printf("DBVersion is not in range %v-%v - run aborted\n", cfg.PatchCfg.MinDB, cfg.PatchCfg.MaxDB)
+			fmt.Printf("DBVersion is not %v - run aborted\n", dbTargetVersion())
 			osExit(1)
 		}
 		checkAppVersion()
@@ -251,7 +304,11 @@ func main() {
 		}
 	}
 	if !*silent {
-		fmt.Printf("\nApplying patch \"%v\"\n", cfg.PatchCfg.PatchID)
+		fmt.Printf("\nApplying patch \"%v\"\n\n", cfg.PatchCfg.PatchID)
+		if !getYN("Ok to apply this patch") {
+			fmt.Println("Run abandoned")
+			osExit(1)
+		}
 	}
 	runPatchSQL()
 	runMakeFolders()
@@ -259,6 +316,7 @@ func main() {
 
 	if !*silent {
 		fmt.Printf("Patch applied successfully\n\n")
+		osExit(0)
 	}
 
 }
@@ -301,7 +359,7 @@ func openPatchfile() {
 
 func osExit(res int) {
 
-	if *debugwait || cfg.KeyWait {
+	if !*silent {
 		waitforkey()
 	}
 
@@ -388,7 +446,7 @@ func runPatchSQL() {
 }
 func waitforkey() {
 
-	fmt.Printf("%v: Press [Enter] to exit ... \n", apptitle)
+	fmt.Printf("\n%v: Press [Enter] to exit ... \n", apptitle)
 	fmt.Scanln()
 
 }
