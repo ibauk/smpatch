@@ -316,6 +316,7 @@ func main() {
 
 	if !*silent {
 		fmt.Printf("Patch applied successfully\n\n")
+		closePatchfile()
 		osExit(0)
 	}
 

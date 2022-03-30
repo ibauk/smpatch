@@ -4,7 +4,7 @@
 
 
 ## The id of this patch, displayed at run time
-id: Post RC4 patches
+id: Upgrade database from 8 to 9
 
 ## Only apply this patch to installations with at least this DBVersion
 mindb: 8
@@ -20,13 +20,10 @@ minapp: 3.0 RC1
 maxapp: 
 
 sql:
+  - ALTER TABLE bonuses ADD COLUMN Image TEXT;
+  - UPDATE rallyparams SET DBVersion=9;
 
 files:
-  - sm/about.php
-  - sm/bonuses.php
-  - sm/scorecard.php
-  - sm/score.css
-  - sm/entrants.php
   
 folders:
 
